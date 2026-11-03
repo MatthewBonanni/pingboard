@@ -188,7 +188,7 @@ const state = {
   authError: "",
 
   board: { groups: [], pins: [] },   // groups: [{id, name, collapsed, query?, dismissed?}]; pins: [{key, repo, number, group, addedAt, seen, via}]
-  prefs: { interval: 60, notify: false, defaultRepo: DEFAULT_REPO, boardWidth: BOARD_WIDTH, following: [], repoProfiles: {}, sort: "manual", unpinClosed: false },
+  prefs: { interval: 60, notify: false, defaultRepo: DEFAULT_REPO, boardWidth: BOARD_WIDTH, following: [], repoProfiles: {}, sort: "manual", filter: "all", owner: "all", unpinClosed: false },
 
   data: new Map(),        // pin key -> PR model
   status: new Map(),      // pin key -> {at, loading, error}
@@ -198,7 +198,6 @@ const state = {
   searches: new Map(),    // group id -> {at, loading, error, missing: Set(pin key)}
 
   cursor: null,
-  filter: "all",
   query: "",
   modal: null,
   pending: [],            // deferred actions: [{id, label, timer}]
@@ -222,6 +221,8 @@ function normalizePrefs(raw) {
     following: parseLogins(Array.isArray(prefs.following) ? prefs.following.join(" ") : ""),
     repoProfiles: normalizeRepoProfiles(prefs.repoProfiles),
     sort: SORTS.some((sort) => sort.id === prefs.sort) ? prefs.sort : "manual",
+    filter: FILTERS.some((filter) => filter.id === prefs.filter) ? prefs.filter : "all",
+    owner: OWNERS.some((owner) => owner.id === prefs.owner) ? prefs.owner : "all",
     unpinClosed: Boolean(prefs.unpinClosed)
   };
 }
@@ -230,7 +231,7 @@ function loadUserState() {
   state.prefs = normalizePrefs(store.get(scopedKey("prefs"), {}));
 
   state.board = cleanBoard(store.get(scopedKey("board"), null)) || { groups: [{ id: "g1", name: "Tracking", collapsed: false }], pins: [] };
-  state.cursor = state.board.pins[0]?.key || null;
+  state.cursor = null;
 }
 
 /* Normalise a board read from storage or a backup file; null if it is not one. */
@@ -1213,6 +1214,27 @@ const FILTERS = [
   { id: "closed", label: "Closed", test: (pr) => Boolean(pr) && pr.state !== "OPEN" }
 ];
 
+const OWNERS = [
+  { id: "all", label: "Everyone", test: () => true },
+  { id: "mine", label: "Mine", test: (pr) => Boolean(pr) && isMine(pr) },
+  { id: "others", label: "Others'", test: (pr) => Boolean(pr) && !isMine(pr) }
+];
+
+function isMine(pr) {
+  return pr.author.toLowerCase() === state.user?.login.toLowerCase();
+}
+
+function setOwner(id) {
+  state.prefs.owner = id;
+  persistPrefs();
+  reselect();
+  render();
+}
+
+function cycleOwner() {
+  setOwner(OWNERS[(OWNERS.findIndex((owner) => owner.id === state.prefs.owner) + 1) % OWNERS.length].id);
+}
+
 /* Orders within each group. Pins that have not loaded yet sort last. */
 const TONE_ORDER = ["bad", "todo", "warn", "running", "good", "neutral", "done"];
 const SORTS = [
@@ -1256,7 +1278,8 @@ function matchesView(pin) {
 }
 
 function setFilter(id) {
-  state.filter = id;
+  state.prefs.filter = id;
+  persistPrefs();
   reselect();
   render();
 }
@@ -1269,8 +1292,9 @@ function reselect() {
 
 function matchesFilter(pin) {
   const pr = state.data.get(pin.key);
-  const filter = FILTERS.find((item) => item.id === state.filter) || FILTERS[0];
-  if (!filter.test(pr)) return false;
+  const filter = FILTERS.find((item) => item.id === state.prefs.filter) || FILTERS[0];
+  const owner = OWNERS.find((item) => item.id === state.prefs.owner) || OWNERS[0];
+  if (!filter.test(pr) || !owner.test(pr)) return false;
   const query = state.query.trim().toLowerCase();
   if (!query) return true;
   const haystack = `${pin.repo}#${pin.number} ${pr?.title || ""} ${pr?.author || ""} ${(pr?.labels || []).map((label) => label.name).join(" ")}`.toLowerCase();
@@ -1574,40 +1598,6 @@ function buildShell() {
   return el("div", { class: "shell" }, [
     el("header", { class: "top" }, [
       el("div", { class: "brand" }, [el("span", { class: "brand-dot" }), "Pingboard"]),
-      el("div", { class: "chips", id: "chips" }),
-      el("input", {
-        id: "filter",
-        class: "filter",
-        type: "search",
-        placeholder: "Filter pinned PRs",
-        spellcheck: "false",
-        autocomplete: "off",
-        "aria-label": "Filter pinned pull requests",
-        oninput: (event) => {
-          state.query = event.target.value;
-          reselect();
-          render();
-        },
-        onkeydown: (event) => {
-          if (event.key === "Enter") event.target.blur();
-          if (event.key === "Escape") {
-            event.target.value = "";
-            state.query = "";
-            event.target.blur();
-            render();
-          }
-        }
-      }),
-      el("select", {
-        id: "sort",
-        class: "sort",
-        title: "Sort each group (s)",
-        "aria-label": "Sort pinned pull requests",
-        onchange: (event) => {
-          setSort(event.target.value);
-          event.target.blur();
-        }
-      }, SORTS.map((sort) => el("option", { value: sort.id, text: sort.label }))),
       el("div", { class: "top-right" }, [
         el("span", { class: "sync", id: "sync" }),
         el("button", { class: "btn primary", onclick: () => openAdd(), text: "+ Add PRs" }),
@@ -1650,7 +1640,46 @@ function buildMain() {
     }
   });
   applyBoardWidth(main);
-  main.append(el("section", { class: "board", id: "board" }), divider, el("aside", { class: "detail", id: "detail" }));
+  const list = el("section", { class: "list" }, [
+    el("div", { class: "list-bar" }, [
+      el("input", {
+        id: "filter",
+        class: "filter",
+        type: "search",
+        placeholder: "Filter pinned PRs",
+        spellcheck: "false",
+        autocomplete: "off",
+        "aria-label": "Filter pinned pull requests",
+        oninput: (event) => {
+          state.query = event.target.value;
+          reselect();
+          render();
+        },
+        onkeydown: (event) => {
+          if (event.key === "Enter") event.target.blur();
+          if (event.key === "Escape") {
+            event.target.value = "";
+            state.query = "";
+            event.target.blur();
+            render();
+          }
+        }
+      }),
+      el("select", {
+        id: "sort",
+        class: "sort",
+        title: "Sort each group (s)",
+        "aria-label": "Sort pinned pull requests",
+        onchange: (event) => {
+          setSort(event.target.value);
+          event.target.blur();
+        }
+      }, SORTS.map((sort) => el("option", { value: sort.id, text: sort.label }))),
+      el("div", { class: "chips", id: "chips" })
+    ]),
+    el("div", { class: "board", id: "board" })
+  ]);
+  main.append(list, divider, el("aside", { class: "detail", id: "detail" }));
   return main;
 }
 
@@ -1663,15 +1692,23 @@ function applyBoardWidth(main = document.querySelector(".main")) {
 }
 
 function renderTop() {
-  const counts = Object.fromEntries(FILTERS.map((filter) => [filter.id, 0]));
+  // Each chip counts the pins it would show combined with the other row's selection.
+  const filter = FILTERS.find((item) => item.id === state.prefs.filter) || FILTERS[0];
+  const owner = OWNERS.find((item) => item.id === state.prefs.owner) || OWNERS[0];
+  const counts = new Map([...FILTERS, ...OWNERS].map((item) => [item, 0]));
   for (const pin of state.board.pins) {
     const pr = state.data.get(pin.key);
-    for (const filter of FILTERS) if (filter.test(pr)) counts[filter.id] += 1;
+    if (owner.test(pr)) for (const item of FILTERS) if (item.test(pr)) counts.set(item, counts.get(item) + 1);
+    if (filter.test(pr)) for (const item of OWNERS) if (item.test(pr)) counts.set(item, counts.get(item) + 1);
   }
-  document.querySelector("#chips").replaceChildren(...FILTERS.map((filter) => el("button", {
-    class: `chip-btn f-${filter.id}${state.filter === filter.id ? " active" : ""}`,
-    onclick: () => setFilter(filter.id)
-  }, [filter.label, el("span", { class: "count", text: String(counts[filter.id]) })])));
+  const chip = (item, active, onclick, count) => el("button", {
+    class: `chip-btn f-${item.id}${active ? " active" : ""}`,
+    onclick
+  }, [item.label, el("span", { class: "count", text: String(count) })]);
+  document.querySelector("#chips").replaceChildren(
+    el("div", { class: "chip-row" }, FILTERS.map((item) => chip(item, state.prefs.filter === item.id, () => setFilter(item.id), counts.get(item)))),
+    el("div", { class: "chip-row" }, OWNERS.map((item) => chip(item, state.prefs.owner === item.id, () => setOwner(item.id), counts.get(item))))
+  );
 
   const busy = refreshActive > 0;
   const rate = state.rate.remaining;
@@ -1790,7 +1827,7 @@ function renderBoard(index) {
     ]));
     return;
   }
-  const filtering = state.filter !== "all" || state.query.trim();
+  const filtering = state.prefs.filter !== "all" || state.prefs.owner !== "all" || state.query.trim();
   const sections = [];
   for (const group of state.board.groups) {
     const pins = groupPins(group);
@@ -2248,7 +2285,6 @@ function signOut(message = "") {
   state.user = null;
   state.modal = null;
   state.query = "";
-  state.filter = "all";
   for (const item of state.pending) clearTimeout(item.timer);
   state.pending = [];
   state.toasts = [];
@@ -2759,6 +2795,7 @@ const HELP = [
   ["shift+m", "merge or auto-merge"],
   ["z", "undo a comment or branch update before it is sent"],
   ["1 – 6", "filter: all · failing · running · green · no CI · closed"],
+  ["m", "cycle owner: everyone · mine · others'"],
   ["/", "filter by text"],
   [". / shift+r", "refresh this PR / everything"],
   ["?", "this help"],
@@ -2800,6 +2837,7 @@ const KEYS = {
   v: () => quickLabel(1),
   A: () => approve(),
   M: () => mergeMenu(),
+  m: cycleOwner,
   z: undoPending,
   ".": () => cursorPin() && queueRefresh(cursorPin(), { force: true }),
   R: refreshAll,
@@ -2810,6 +2848,7 @@ const KEYS = {
     state.query = "";
     const input = document.querySelector("#filter");
     if (input) input.value = "";
+    state.prefs.owner = "all";
     setFilter("all");
   }
 };
