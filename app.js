@@ -194,6 +194,7 @@ const state = {
 
   cursor: null,
   filter: "all",
+  owner: "all",
   query: "",
   modal: null,
   pending: [],            // deferred actions: [{id, label, timer}]
@@ -1054,6 +1055,26 @@ const FILTERS = [
   { id: "closed", label: "Closed", test: (pr) => Boolean(pr) && pr.state !== "OPEN" }
 ];
 
+const OWNERS = [
+  { id: "all", label: "Everyone", test: () => true },
+  { id: "mine", label: "Mine", test: (pr) => Boolean(pr) && isMine(pr) },
+  { id: "others", label: "Others'", test: (pr) => Boolean(pr) && !isMine(pr) }
+];
+
+function isMine(pr) {
+  return pr.author.toLowerCase() === state.user?.login.toLowerCase();
+}
+
+function setOwner(id) {
+  state.owner = id;
+  reselect();
+  render();
+}
+
+function cycleOwner() {
+  setOwner(OWNERS[(OWNERS.findIndex((owner) => owner.id === state.owner) + 1) % OWNERS.length].id);
+}
+
 /* The selected PR stays listed even if a refresh moves it out of the filter, so
    actions never silently retarget to another row. */
 function matchesView(pin) {
@@ -1075,7 +1096,8 @@ function reselect() {
 function matchesFilter(pin) {
   const pr = state.data.get(pin.key);
   const filter = FILTERS.find((item) => item.id === state.filter) || FILTERS[0];
-  if (!filter.test(pr)) return false;
+  const owner = OWNERS.find((item) => item.id === state.owner) || OWNERS[0];
+  if (!filter.test(pr) || !owner.test(pr)) return false;
   const query = state.query.trim().toLowerCase();
   if (!query) return true;
   const haystack = `${pin.repo}#${pin.number} ${pr?.title || ""} ${pr?.author || ""} ${(pr?.labels || []).map((label) => label.name).join(" ")}`.toLowerCase();
@@ -1458,15 +1480,24 @@ function applyBoardWidth(main = document.querySelector(".main")) {
 }
 
 function renderTop() {
-  const counts = Object.fromEntries(FILTERS.map((filter) => [filter.id, 0]));
+  // Each chip counts the pins it would show combined with the other row's selection.
+  const filter = FILTERS.find((item) => item.id === state.filter) || FILTERS[0];
+  const owner = OWNERS.find((item) => item.id === state.owner) || OWNERS[0];
+  const counts = new Map([...FILTERS, ...OWNERS].map((item) => [item, 0]));
   for (const pin of state.board.pins) {
     const pr = state.data.get(pin.key);
-    for (const filter of FILTERS) if (filter.test(pr)) counts[filter.id] += 1;
+    if (owner.test(pr)) for (const item of FILTERS) if (item.test(pr)) counts.set(item, counts.get(item) + 1);
+    if (filter.test(pr)) for (const item of OWNERS) if (item.test(pr)) counts.set(item, counts.get(item) + 1);
   }
-  document.querySelector("#chips").replaceChildren(...FILTERS.map((filter) => el("button", {
-    class: `chip-btn f-${filter.id}${state.filter === filter.id ? " active" : ""}`,
-    onclick: () => setFilter(filter.id)
-  }, [filter.label, el("span", { class: "count", text: String(counts[filter.id]) })])));
+  const chip = (item, active, onclick, count) => el("button", {
+    class: `chip-btn f-${item.id}${active ? " active" : ""}`,
+    onclick
+  }, [item.label, el("span", { class: "count", text: String(count) })]);
+  document.querySelector("#chips").replaceChildren(
+    ...FILTERS.map((item) => chip(item, state.filter === item.id, () => setFilter(item.id), counts.get(item))),
+    el("span", { class: "chip-sep", "aria-hidden": "true" }),
+    ...OWNERS.map((item) => chip(item, state.owner === item.id, () => setOwner(item.id), counts.get(item)))
+  );
 
   const busy = refreshActive > 0;
   const rate = state.rate.remaining;
@@ -1584,7 +1615,7 @@ function renderBoard(index) {
     ]));
     return;
   }
-  const filtering = state.filter !== "all" || state.query.trim();
+  const filtering = state.filter !== "all" || state.owner !== "all" || state.query.trim();
   const sections = [];
   for (const group of state.board.groups) {
     const pins = groupPins(group);
@@ -2024,6 +2055,7 @@ function signOut(message = "") {
   state.modal = null;
   state.query = "";
   state.filter = "all";
+  state.owner = "all";
   for (const item of state.pending) clearTimeout(item.timer);
   state.pending = [];
   state.toasts = [];
@@ -2529,6 +2561,7 @@ const HELP = [
   ["shift+m", "merge or auto-merge"],
   ["z", "undo a comment or branch update before it is sent"],
   ["1 – 6", "filter: all · failing · running · green · no CI · closed"],
+  ["m", "cycle owner: everyone · mine · others'"],
   ["/", "filter by text"],
   [". / shift+r", "refresh this PR / everything"],
   ["?", "this help"],
@@ -2569,6 +2602,7 @@ const KEYS = {
   v: () => quickLabel(1),
   A: () => approve(),
   M: () => mergeMenu(),
+  m: cycleOwner,
   z: undoPending,
   ".": () => cursorPin() && queueRefresh(cursorPin(), { force: true }),
   R: refreshAll,
@@ -2579,6 +2613,7 @@ const KEYS = {
     state.query = "";
     const input = document.querySelector("#filter");
     if (input) input.value = "";
+    state.owner = "all";
     setFilter("all");
   }
 };
