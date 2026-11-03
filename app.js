@@ -1675,7 +1675,10 @@ function renderBoard(index) {
   }
   if (!sections.length) sections.push(el("div", { class: "empty" }, [el("p", { text: "No pinned pull requests match this filter." })]));
   else if (!filtering) sections.push(el("button", { class: "link-btn new-group", onclick: newGroup, text: "+ New group" }));
+  // WebKit resets scrollTop when every child is replaced.
+  const { scrollTop } = board;
   board.replaceChildren(...sections);
+  board.scrollTop = scrollTop;
 }
 
 function groupSummary(pins, index) {
@@ -1937,7 +1940,10 @@ function renderDetail(index) {
   // Comments run the full width below, newest first.
   blocks.push(...comments);
 
+  const scrollTop = detail.dataset.key === pin.key ? detail.scrollTop : 0;
   detail.replaceChildren(...blocks);
+  detail.scrollTop = scrollTop;
+  detail.dataset.key = pin.key;
 }
 
 function panel(title, children) {
