@@ -1710,9 +1710,9 @@ function row(pin, index) {
       el("div", { class: "row-meta" }, [
         el("a", { class: "num", href: pr.url, target: "_blank", rel: "noopener", title: "Open on GitHub", onclick: (event) => event.stopPropagation(), text: shortRef(pr.repo, pr.number) }),
         authorName(pr.author),
+        pr.reviewRequested ? el("span", { class: "t-warn", text: "your review requested" }) : null,
         el("span", { title: new Date(pr.updatedAt).toLocaleString(), text: `updated ${ago(pr.updatedAt)} ago` }),
         review ? el("span", { class: pr.reviewDecision === "APPROVED" ? "t-good" : "t-bad", text: review }) : null,
-        pr.reviewRequested ? el("span", { class: "t-warn", text: "your review requested" }) : null,
         ...pr.labels.filter((label) => quick.includes(label.name)).map(labelChip),
         status.error ? el("span", { class: "t-bad", title: status.error, text: "refresh failed" }) : null
       ])
