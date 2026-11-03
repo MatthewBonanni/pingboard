@@ -20,7 +20,7 @@ Each row is one pull request with a status and, where there is an obvious next s
 | **Ready to merge** | green and approved | Merge… |
 | **Merge conflicts** | the author has to resolve them | — |
 
-The chips in the top bar filter by CI state and, separately, by owner: **Mine** shows the PRs you authored, **Others'** the ones you are shepherding for someone else.
+The chips above the list filter by CI state and, separately, by owner: **Mine** shows the PRs you authored, **Others'** the ones you are shepherding for someone else. The selection is remembered.
 
 A blue dot marks a PR that changed since you last selected it. Drag rows to reorder them or move them between groups, and drag the divider to resize the list.
 
