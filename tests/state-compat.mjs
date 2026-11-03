@@ -37,7 +37,7 @@ function mockRepository(owner, name, number) {
       baseRefName: "main", headRefOid: oid, mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", reviewDecision: null,
       viewerCanUpdateBranch: true, viewerCanEnableAutoMerge: true, autoMergeRequest: null,
       additions: 1, deletions: 1, changedFiles: 1,
-      labels: { nodes: [] }, latestOpinionatedReviews: { nodes: [] }, comments: { nodes: [] },
+      labels: { nodes: [] }, latestOpinionatedReviews: { nodes: [] }, reviewRequests: { nodes: [] }, comments: { nodes: [] },
       commits: { nodes: [{ commit: { oid, committedDate: now, statusCheckRollup: null } }] }
     }
   };
