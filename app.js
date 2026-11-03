@@ -184,7 +184,7 @@ const state = {
   authError: "",
 
   board: { groups: [], pins: [] },   // pins: [{key, repo, number, group, addedAt, seen}]
-  prefs: { interval: 60, notify: false, defaultRepo: DEFAULT_REPO, boardWidth: BOARD_WIDTH, following: [], repoProfiles: {} },
+  prefs: { interval: 60, notify: false, defaultRepo: DEFAULT_REPO, boardWidth: BOARD_WIDTH, following: [], repoProfiles: {}, sort: "manual" },
 
   data: new Map(),        // pin key -> PR model
   status: new Map(),      // pin key -> {at, loading, error}
@@ -215,7 +215,8 @@ function normalizePrefs(raw) {
     boardWidth: Number(prefs.boardWidth) || BOARD_WIDTH,
     defaultRepo: /^[\w.-]+\/[\w.-]+$/.test(prefs.defaultRepo || "") ? prefs.defaultRepo : DEFAULT_REPO,
     following: parseLogins(Array.isArray(prefs.following) ? prefs.following.join(" ") : ""),
-    repoProfiles: normalizeRepoProfiles(prefs.repoProfiles)
+    repoProfiles: normalizeRepoProfiles(prefs.repoProfiles),
+    sort: SORTS.some((sort) => sort.id === prefs.sort) ? prefs.sort : "manual"
   };
 }
 
@@ -1033,6 +1034,7 @@ function deleteGroup(group) {
 function shiftPin(delta) {
   const pin = cursorPin();
   if (!pin) return;
+  if (isSorted()) return toast("Switch the sort to Manual order to reorder by hand");
   const pins = state.board.pins;
   const peers = pins.filter((item) => item.group === pin.group);
   const neighbour = peers[peers.indexOf(pin) + delta];
@@ -1053,6 +1055,42 @@ const FILTERS = [
   { id: "noci", label: "No CI", test: (pr) => pr?.state === "OPEN" && pr.ci.state === "none" },
   { id: "closed", label: "Closed", test: (pr) => Boolean(pr) && pr.state !== "OPEN" }
 ];
+
+/* Orders within each group. Pins that have not loaded yet sort last. */
+const TONE_ORDER = ["bad", "todo", "warn", "running", "good", "neutral", "done"];
+const SORTS = [
+  { id: "manual", label: "Manual order" },
+  { id: "updated", label: "Recently updated", value: (pin, pr) => pr && Date.parse(pr.updatedAt) },
+  { id: "added", label: "Recently pinned", value: (pin) => pin.addedAt },
+  { id: "number", label: "Newest PR", value: (pin) => pin.number },
+  { id: "status", label: "Needs attention", value: (pin, pr, index) => pr && -TONE_ORDER.indexOf(verdict(pr, index).tone) }
+];
+
+function isSorted() {
+  return state.prefs.sort !== "manual";
+}
+
+function setSort(id) {
+  state.prefs.sort = id;
+  persistPrefs();
+  scrollCursorIntoView();
+}
+
+function cycleSort() {
+  setSort(SORTS[(SORTS.findIndex((sort) => sort.id === state.prefs.sort) + 1) % SORTS.length].id);
+}
+
+function sortPins(pins) {
+  const sort = SORTS.find((item) => item.id === state.prefs.sort);
+  if (!sort?.value) return pins;
+  const index = failureIndex();
+  const keyed = pins.map((pin) => {
+    const pr = state.data.get(pin.key);
+    return { pin, value: sort.value(pin, pr, index) ?? -Infinity, updated: pr ? Date.parse(pr.updatedAt) : -Infinity };
+  });
+  keyed.sort((a, b) => b.value - a.value || b.updated - a.updated);
+  return keyed.map((item) => item.pin);
+}
 
 /* The selected PR stays listed even if a refresh moves it out of the filter, so
    actions never silently retarget to another row. */
@@ -1083,7 +1121,7 @@ function matchesFilter(pin) {
 }
 
 function groupPins(group) {
-  return state.board.pins.filter((pin) => pin.group === group.id && matchesView(pin));
+  return sortPins(state.board.pins.filter((pin) => pin.group === group.id && matchesView(pin)));
 }
 
 function visiblePins() {
@@ -1403,6 +1441,16 @@ function buildShell() {
           }
         }
       }),
+      el("select", {
+        id: "sort",
+        class: "sort",
+        title: "Sort each group (s)",
+        "aria-label": "Sort pinned pull requests",
+        onchange: (event) => {
+          setSort(event.target.value);
+          event.target.blur();
+        }
+      }, SORTS.map((sort) => el("option", { value: sort.id, text: sort.label }))),
       el("div", { class: "top-right" }, [
         el("span", { class: "sync", id: "sync" }),
         el("button", { class: "btn primary", onclick: () => openAdd(), text: "+ Add PRs" }),
@@ -1477,6 +1525,7 @@ function renderTop() {
   sync.className = `sync${busy ? " busy" : ""}${throttled ? " warn" : ""}`;
   sync.textContent = parts.filter(Boolean).join(" · ");
   document.querySelector("#me").textContent = "Settings";
+  document.querySelector("#sort").value = state.prefs.sort;
 }
 
 /* The one-line answer to "what is going on with this PR, and what comes next?" */
@@ -1668,7 +1717,7 @@ function row(pin, index) {
       event.dataTransfer.setData("text/plain", pr?.url || pin.key);
     },
     ondragover: (event) => {
-      if (!dragKey || dragKey === pin.key) return;
+      if (!dragKey || dragKey === pin.key || isSorted()) return;
       event.preventDefault();
       event.stopPropagation();
       event.currentTarget.classList.add("drop-before");
@@ -2514,7 +2563,8 @@ function openSettings() {
 
 const HELP = [
   ["j / k", "move down / up"],
-  ["shift+j / shift+k", "reorder within the group"],
+  ["shift+j / shift+k", "reorder within the group (manual order only)"],
+  ["s", "cycle sort: manual · recently updated · recently pinned · newest PR · needs attention"],
   ["o / Enter", "open the PR on GitHub"],
   ["b", "open the CI build"],
   ["a", "add PRs (search, lists, paste numbers or URLs)"],
@@ -2554,6 +2604,7 @@ const KEYS = {
   ArrowUp: () => moveCursor(-1),
   J: () => shiftPin(1),
   K: () => shiftPin(-1),
+  s: cycleSort,
   o: () => openUrl(cursorPR()?.url),
   Enter: () => openUrl(cursorPR()?.url),
   b: () => openBuild(),
