@@ -444,6 +444,7 @@ query($owner: String!, $name: String!, $number: Int!, $baseRef: String!, $headRe
       additions deletions changedFiles
       labels(first: 40) { nodes { name color } }
       latestOpinionatedReviews(first: 20) { nodes { state author { login } } }
+      reviewRequests(first: 100) { nodes { requestedReviewer { ... on User { isViewer } } } }
       comments(last: 5) { nodes { author { login } bodyText createdAt url } }
       commits(last: 1) { nodes { commit {
         oid committedDate
@@ -657,6 +658,7 @@ async function fetchPR(pin, { force = false } = {}) {
     files: pr.changedFiles,
     labels: pr.labels.nodes,
     reviews: pr.latestOpinionatedReviews.nodes.map((review) => ({ login: review.author?.login || "ghost", state: review.state })),
+    reviewRequested: pr.state === "OPEN" && pr.reviewRequests.nodes.some((request) => request.requestedReviewer?.isViewer),
     comments: pr.comments.nodes.map((comment) => ({ login: comment.author?.login || "ghost", text: comment.bodyText.slice(0, 700), at: comment.createdAt, url: safeUrl(comment.url) })),
     behind: repo.ref?.compare?.behindBy ?? null,
     checks,
@@ -665,9 +667,11 @@ async function fetchPR(pin, { force = false } = {}) {
   };
 }
 
-/* What the user has "seen" for a PR; a different signature lights the change dot. */
+/* What the user has "seen" for a PR; a different signature lights the change dot.
+   A review request is appended only while it stands, so other signatures stay as they were saved. */
 function signature(pr) {
-  return [pr.state, pr.headOid, pr.ci.state, pr.ci.fail, pr.reviewDecision].join("|");
+  const parts = [pr.state, pr.headOid, pr.ci.state, pr.ci.fail, pr.reviewDecision];
+  return (pr.reviewRequested ? [...parts, "review-requested"] : parts).join("|");
 }
 
 function hasChanged(pin) {
@@ -1051,7 +1055,8 @@ const FILTERS = [
   { id: "running", label: "Running", test: (pr) => pr?.state === "OPEN" && pr.ci.state === "running" },
   { id: "green", label: "Green", test: (pr) => pr?.state === "OPEN" && pr.ci.state === "passed" },
   { id: "noci", label: "No CI", test: (pr) => pr?.state === "OPEN" && pr.ci.state === "none" },
-  { id: "closed", label: "Closed", test: (pr) => Boolean(pr) && pr.state !== "OPEN" }
+  { id: "closed", label: "Closed", test: (pr) => Boolean(pr) && pr.state !== "OPEN" },
+  { id: "requested", label: "Review requested", test: (pr) => Boolean(pr?.reviewRequested) }
 ];
 
 /* The selected PR stays listed even if a refresh moves it out of the filter, so
@@ -1707,6 +1712,7 @@ function row(pin, index) {
         authorName(pr.author),
         el("span", { title: new Date(pr.updatedAt).toLocaleString(), text: `updated ${ago(pr.updatedAt)} ago` }),
         review ? el("span", { class: pr.reviewDecision === "APPROVED" ? "t-good" : "t-bad", text: review }) : null,
+        pr.reviewRequested ? el("span", { class: "t-warn", text: "your review requested" }) : null,
         ...pr.labels.filter((label) => quick.includes(label.name)).map(labelChip),
         status.error ? el("span", { class: "t-bad", title: status.error, text: "refresh failed" }) : null
       ])
@@ -1854,6 +1860,7 @@ function renderDetail(index) {
     const mine = pr.reviews.find((review) => review.login === state.user.login);
     side.push(panel("Review & merge", [
       el("div", { text: reviewSentence(pr) }),
+      pr.reviewRequested ? el("div", { class: "t-warn", text: "Your review is requested" }) : null,
       el("div", { class: "btn-row" }, [
         mine?.state === "APPROVED" ? el("span", { class: "t-good", text: "✓ You approved" }) : btn("Approve", () => approve(pr)),
         btn(pr.autoMerge ? "Auto-merge is on…" : "Merge…", () => mergeMenu(pr))
@@ -2528,7 +2535,7 @@ const HELP = [
   ["shift+a", "approve"],
   ["shift+m", "merge or auto-merge"],
   ["z", "undo a comment or branch update before it is sent"],
-  ["1 – 6", "filter: all · failing · running · green · no CI · closed"],
+  ["1 – 7", "filter: all · failing · running · green · no CI · closed · review requested"],
   ["/", "filter by text"],
   [". / shift+r", "refresh this PR / everything"],
   ["?", "this help"],
