@@ -51,7 +51,7 @@ Pingboard takes a **classic** personal access token with the `repo` scope (`publ
 
 ## Refresh and rate limits
 
-Open PRs refresh every 60 seconds by default (configurable), background tabs five times slower, at one GraphQL request per PR. The base-branch baseline covers the last 30 commits and is re-read every 10 minutes. Remaining API quota is shown in the top bar, and polling pauses if it runs low.
+Open PRs refresh every 60 seconds by default (configurable), background tabs five times slower, reading up to 10 PRs per GraphQL request. The base-branch baseline covers the last 30 commits and is re-read every 10 minutes. Remaining API quota is shown in the top bar, and polling pauses if it runs low.
 
 ## Other repositories
 
